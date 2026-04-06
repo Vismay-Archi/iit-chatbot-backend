@@ -983,7 +983,7 @@ def main():
 
 
 
-"""
+
 async def run_traffic_cop(question: str, session_id: Optional[str] = None) -> dict:
     
     FastAPI-compatible async entry point for the Traffic Cop pipeline.
@@ -1235,7 +1235,7 @@ async def run_traffic_cop(question: str, session_id: Optional[str] = None) -> di
         result["clarification_suggestion"] = clarification
 
     return result
-"""
+
 
 if __name__ == "__main__":
     main()
