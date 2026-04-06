@@ -4,3 +4,4 @@ __pycache__/
 *.pyc
 session_memory.json
 uvicorn
+models/
