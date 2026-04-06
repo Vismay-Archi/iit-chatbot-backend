@@ -1,4 +1,4 @@
-from pydantic_settings import BaseSettings
+    from pydantic_settings import BaseSettings
 from typing import List
 
 class Settings(BaseSettings):
@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     EMBEDDING_MODEL: str = "all-mpnet-base-v2"
 
     # API
-    ALLOWED_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:5173"]
+    ALLOWED_ORIGINS: List[str] = ["*"]
     TOP_K: int = 5
 
     class Config:
