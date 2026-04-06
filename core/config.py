@@ -1,24 +1,23 @@
 from pydantic_settings import BaseSettings
 from typing import List
 
-class Settings(BaseSettings):
-    # LLM Provider: "theta" or "ollama"
-    LLM_PROVIDER: str = "theta"
 
-    # Theta EdgeCloud
-    THETA_API_KEY: str = "your-theta-api-key-here"
-    THETA_BASE_URL: str = "https://ondemand.thetaedgecloud.com/infer_request"
-    THETA_MODEL: str = "llama_3_8b"
+class Settings(BaseSettings):
+    LLM_PROVIDER: str = "azure_openai"
+
+    # Azure OpenAI / Foundry
+    AZURE_OPENAI_API_KEY: str = ""
+    AZURE_OPENAI_ENDPOINT: str = ""
+    AZURE_OPENAI_DEPLOYMENT: str = "gpt-4o"
+    AZURE_OPENAI_API_VERSION: str = "2024-02-01"
 
     # Ollama (fallback)
     OLLAMA_BASE_URL: str = "http://localhost:11434"
     OLLAMA_MODEL: str = "llama3.1"
 
-    # FAISS — supports .faiss/.json or .faiss/.pkl
+    # FAISS
     FAISS_INDEX_PATH: str = "data/faiss_store.faiss"
-    CHUNKS_PATH: str = "data/faiss_store.pkl"   # or chunks.json
-
-    # Embedding model — must match what was used to build the index
+    CHUNKS_PATH: str = "data/faiss_store.pkl"
     EMBEDDING_MODEL: str = "all-mpnet-base-v2"
 
     # API
@@ -27,5 +26,6 @@ class Settings(BaseSettings):
 
     class Config:
         env_file = ".env"
+
 
 settings = Settings()

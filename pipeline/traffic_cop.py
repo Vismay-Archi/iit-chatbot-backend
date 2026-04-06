@@ -170,7 +170,10 @@ def _mentions_summer_session(q: str) -> bool:
     return ("summer 1" in q) or ("summer i" in q) or ("summer 2" in q) or ("summer ii" in q)
 
 def _is_international_topic(q: str) -> bool:
-    return _has_any(q, ["i-20", "i20", "cpt", "opt", "visa", "f-1", "f1", "sevis"])
+    return bool(re.search(
+        r"\b(i-20|i20|cpt|opt|visa|f-1|f1|sevis)\b",
+        q
+    ))
 
 def _is_max_hours_topic(q: str) -> bool:
     return _has_any(q, [
@@ -907,7 +910,10 @@ def main():
 
         "SEMESTER START DATE — CRITICAL:\n"
         "- 'Courses Begin' is the START date for ALL terms (Spring, Fall, Summer 1, Summer 2).\n"
-        "- 'Add/Drop Deadline', 'Memorial Day', 'Juneteenth', 'Independence Day' are NOT the start date.\n"
+        "- If multiple lines say 'Courses Begin', the EARLIEST date is the semester start.\n"
+        "- 'Courses Begin for ID Full Semester' or 'Courses Begin for ID A Session' are NOT the main semester start — ignore these for start date questions.\n"
+        "- 'Add/Drop Deadline', 'Last Day to Add/Drop', 'Memorial Day', 'Juneteenth', 'Independence Day' are NOT the start date.\n"
+        "- Spring 2026 specific: Courses Begin January 12, 2026. January 20 is the add/drop deadline, NOT the start.\n"
         "- Example: 'Courses Begin: 5/18' / 'Memorial Day: 5/25' → Summer 1 starts May 18.\n"
 
         "DROP vs WITHDRAW — CRITICAL:\n"
@@ -986,9 +992,9 @@ def main():
 
 async def run_traffic_cop(question: str, session_id: Optional[str] = None) -> dict:
     
-   # FastAPI-compatible async entry point for the Traffic Cop pipeline.
-    #Uses shared FAISS loader and memory system.
-    #All retrieval, reranking, and clarification logic is the original code above.
+  #  FastAPI-compatible async entry point for the Traffic Cop pipeline.
+   # Uses shared FAISS loader and memory system.
+   # All retrieval, reranking, and clarification logic is the original code above.
     
     import asyncio
     import time as _time
@@ -1181,44 +1187,14 @@ async def run_traffic_cop(question: str, session_id: Optional[str] = None) -> di
 
     messages = [{"role": "system", "content": system}, {"role": "user", "content": user_prompt}]
 
-    # Call Theta async
+    # Call Azure OpenAI GPT-4o
     answer = ""
-    headers = {
-        "Authorization": f"Bearer {settings.THETA_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "input": {
-            "messages": messages,
-            "max_tokens": 500,
-            "temperature": 0.3,
-            "top_p": 0.7,
-            "stream": False,
-        }
-    }
-    url = f"{settings.THETA_BASE_URL}/{settings.THETA_MODEL}/completions"
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        for attempt in range(3):
-            r = await client.post(url, json=payload, headers=headers)
-            if r.status_code == 409:
-                await asyncio.sleep(5 * (attempt + 1))
-                continue
-            r.raise_for_status()
-            data = r.json()
-            try:
-                answer = data["body"]["infer_requests"][0]["output"]["message"].strip()
-                break
-            except (KeyError, IndexError, TypeError):
-                pass
-            try:
-                if "choices" in data:
-                    answer = data["choices"][0]["message"]["content"].strip()
-                    break
-                if "output" in data and isinstance(data["output"], str):
-                    answer = data["output"].strip()
-                    break
-            except (KeyError, IndexError, TypeError):
-                pass
+    try:
+        from core.llm import call_llm
+        full_prompt = system + "\n\n" + user_prompt
+        answer = await call_llm(full_prompt)
+    except Exception as e:
+        answer = f"Error calling LLM: {str(e)}"
 
     # Save to memory
     if session_id and answer:
