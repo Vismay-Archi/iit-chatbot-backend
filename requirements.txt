@@ -1,0 +1,21 @@
+# Web framework
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+python-dotenv
+
+# FAISS & embeddings
+faiss-cpu
+sentence-transformers
+numpy
+
+# HTTP client (for Theta + Ollama)
+httpx
+
+# LangChain (teammate's self-query uses it)
+langchain==0.1.16
+langchain-community
+
+# Utilities
+requests
