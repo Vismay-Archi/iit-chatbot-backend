@@ -249,7 +249,6 @@ def _expand_query_for_retrieval(q: str) -> str:
         return q + " courses begin last day of classes start end date"
     if any(x in ql for x in ["walk in", "walk in the", "ceremony"]) and "spring" in ql:
         return q + " spring graduation application deadline degree conferral spring ceremony"
-    return q
 
 # Follow-up logic
 def needs_followup(user_q: str) -> Optional[str]:
@@ -274,6 +273,8 @@ def needs_followup(user_q: str) -> Optional[str]:
         return None
 
     if _is_graduation_topic(q):
+        if _has_any(q, ["gpa", "grade point", "requirement", "requirements", "minimum", "eligibility"]):
+            return None
         # FIX: If the question explicitly mentions two terms (e.g. "apply for Summer
         # but walk in Spring ceremony"), it is self-contained — do not ask for
         # clarification.  Count distinct term mentions to detect this case.
@@ -314,7 +315,8 @@ def needs_followup(user_q: str) -> Optional[str]:
         # Skip clarification for policy questions that apply universally
         _is_policy_q = _has_any(q, ["refund", "w grade", "gpa", "affect my", "what happens",
                                      "will it appear", "does it affect", "does dropping",
-                                     "what is the difference", "transfer credit"])
+                                     "what is the difference", "transfer credit",
+                                     "can i still", "is it possible", "still add"])
         if _is_policy_q:
             return None
         # Skip clarification if question has specific credit numbers + drop/withdraw context
@@ -566,7 +568,7 @@ def search(
 ) -> List[Dict[str, Any]]:
 
 
-    query2 = _expand_query_for_retrieval(query)
+    query2 = _expand_query_for_retrieval(query) or query
 
     qv = _embed_query(embedder, query2)
     scores, ids = store.index.search(qv, max(k, overfetch))
@@ -616,6 +618,21 @@ def search(
                 r["_date_boost"] = 10  # add a temp score boost
         out.sort(key=lambda r: (r.pop("_date_boost", 0) + r["score"]), reverse=True)
 
+
+    if "gpa" in query.lower() and any(x in query.lower() for x in ["graduate", "graduation", "degree"]):
+        direct = [
+            {"text": c.text, "meta": c.meta, "score": 0.95}
+            for c in store.chunks
+            if (
+                any(x in c.text.lower() for x in ["gpa", "grade point", "3.0", "3.25"])
+                and "co-terminal" not in c.text.lower()
+                and (c.meta or {}).get("chunk_type") != "directory_people"
+            )               
+            and any(x in c.text.lower() for x in ["graduate", "graduation", "degree", "conferral"])
+            and (c.meta or {}).get("chunk_type") != "directory_people"
+        ][:6]
+        out = direct + out
+    
     #Re-rank remaining results
     out = _rerank(out, query)
     ql = (query or "").lower()
@@ -626,7 +643,7 @@ def search(
     # keep only chunks that match the query terms
     filtered = [
         r for r in out
-        if sum(t in (r.get("text") or "").lower() for t in terms) >= 2
+        if sum(t in (r.get("text") or "").lower() for t in terms) >= (1 if len(terms) <= 3 else 2)
     ]
 
     if filtered:
@@ -692,7 +709,7 @@ def format_context(hits: List[Dict[str, Any]]) -> str:
                 header_bits.append(f"{k.upper()}: {meta[k]}")
         header = " | ".join(header_bits) if header_bits else f"ID: {h.get('id')}"
 
-        text = (h.get("text") or "").strip()
+        text = (h.get("text") or "").strip()[:500]
 
         if url:
             blocks.append(f"SOURCE_URL: {url}\n{header}\n{text}")
@@ -803,6 +820,14 @@ def main():
             else:  # long answer = user restated the question themselves
                 q = q  # use their new phrasing as-is
             pending_question = None
+        if q.lower().startswith("browse "):
+            keyword = q[7:].strip().lower()
+            matches = [(i, c) for i, c in enumerate(store.chunks) if keyword in c.text.lower()]
+            if not matches:
+                print("No chunks found.")
+            for i, c in matches[:10]:
+                print(f"  id={i} | {c.text[:120]}")
+            continue
 
         fu = needs_followup(q)
         if fu:
@@ -810,10 +835,42 @@ def main():
             pending_question = q  # store the original question so the next user input refines it
             continue
         hits = search(store, embedder, q, k=8, overfetch=200)
-       # print("\n[DEBUG] Top chunks retrieved:")
-        #for h in hits[:5]:
-           # meta = h.get("meta") or {}
-           # print(f"  term={meta.get('term')} score={h['score']:.3f} | FULL TEXT: {h['text']}")
+        # Direct calendar injection — bypass FAISS for specific date lookups
+        ql = q.lower()
+        calendar_keywords = {
+            "start": "courses begin",
+            "begin": "courses begin",
+            "when does": "courses begin",
+            "first day": "courses begin",
+            "add/drop": "add/drop",
+            "withdraw": "withdrawal deadline",
+            "last day of class": "last day of courses",
+            "finals": "final grades",
+            "late registration": "late registration",
+        }   
+        term_keywords = {
+            "summer 1": "summer 1",
+            "summer i": "summer 1",
+            "summer 2": "summer 2",
+            "summer ii": "summer 2",
+            "spring": "spring",
+            "fall": "fall",
+        }
+
+        detected_event = next((v for k, v in calendar_keywords.items() if k in ql), None)
+        detected_term = next((v for k, v in term_keywords.items() if k in ql), None)
+
+        if detected_event and detected_term:
+            direct_calendar = [
+                {"text": c.text, "meta": c.meta, "score": 1.0, "id": i}
+                for i, c in enumerate(store.chunks)
+                if detected_term in c.text.lower()
+                and detected_event in c.text.lower()
+            ]
+            if direct_calendar:
+                seen = {h["text"][:80] for h in hits}
+                hits = [d for d in direct_calendar if d["text"][:80] not in seen] + hits
+
         
         if any(x in q.lower() for x in ["how long", "length of", "duration of"]):
             term_key = None
@@ -831,6 +888,21 @@ def main():
                 ]   
                 seen = {h["text"][:80] for h in hits}
                 hits = [d for d in direct if d["text"][:80] not in seen] + hits
+
+
+                   
+        if any(x in q.lower() for x in ["miss the add/drop", "after the add/drop", "after add/drop", "still add", "can i still add"]):
+            direct = [
+                {"text": c.text, "meta": c.meta, "score": 0.95}
+                for c in store.chunks
+                if any(x in c.text.lower() for x in [
+                    "late registration request",
+                    "late registration period will begin",
+                    "day after the add/drop deadline"
+                ])
+            ][:5]
+            seen = {h["text"][:80] for h in hits}
+            hits = [d for d in direct if d["text"][:80] not in seen] + hits
 
         if any(x in q.lower() for x in ["contact", "reach", "email", "phone"]) and \
             any(x in q.lower() for x in ["institute", "center", "office", "department", "college"]):
@@ -893,6 +965,20 @@ def main():
             seen = {h["text"][:80] for h in hits}
             hits = [d for d in direct if d["text"][:80] not in seen] + hits
 
+        if any(x in q.lower() for x in ["hold on my account", "hold on my", "registration hold", "account hold"]):
+            direct = [
+                {"text": c.text, "meta": c.meta, "score": 0.95}
+                for c in store.chunks
+                if "hold type:" in c.text.lower()
+            ][:10]
+            seen = {h["text"][:80] for h in hits}
+            hits = [d for d in direct if d["text"][:80] not in seen] + hits
+        
+        hits = hits[:12]
+        print("\n[DEBUG] Top 5 chunks:")
+        for h in hits[:8]:
+            meta = h.get("meta") or {}
+            print(f"  id={h.get('id', '?')} score={h['score']:.3f} term={meta.get('term')} | {h['text'][:80]}")
         # Fallback: if filters wiped everything, retry with fewer filters
         if not hits:
             hits = search(store, embedder, q, k=5, overfetch=50)
@@ -913,7 +999,6 @@ def main():
         "- If multiple lines say 'Courses Begin', the EARLIEST date is the semester start.\n"
         "- 'Courses Begin for ID Full Semester' or 'Courses Begin for ID A Session' are NOT the main semester start — ignore these for start date questions.\n"
         "- 'Add/Drop Deadline', 'Last Day to Add/Drop', 'Memorial Day', 'Juneteenth', 'Independence Day' are NOT the start date.\n"
-        "- Spring 2026 specific: Courses Begin January 12, 2026. January 20 is the add/drop deadline, NOT the start.\n"
         "- Example: 'Courses Begin: 5/18' / 'Memorial Day: 5/25' → Summer 1 starts May 18.\n"
 
         "DROP vs WITHDRAW — CRITICAL:\n"
@@ -989,12 +1074,12 @@ def main():
 
 
 
-
+"""
 async def run_traffic_cop(question: str, session_id: Optional[str] = None) -> dict:
     
-  #  FastAPI-compatible async entry point for the Traffic Cop pipeline.
-   # Uses shared FAISS loader and memory system.
-   # All retrieval, reranking, and clarification logic is the original code above.
+    FastAPI-compatible async entry point for the Traffic Cop pipeline.
+    Uses shared FAISS loader and memory system.
+    All retrieval, reranking, and clarification logic is the original code above.
     
     import asyncio
     import time as _time
@@ -1211,7 +1296,7 @@ async def run_traffic_cop(question: str, session_id: Optional[str] = None) -> di
         result["clarification_suggestion"] = clarification
 
     return result
-
+"""
 
 if __name__ == "__main__":
     main()
